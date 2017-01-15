@@ -8,6 +8,7 @@ distributable_scripts =				\
   hydra-server					\
   hydra-update-gc-roots				\
   hydra-s3-backup-collect-garbage		\
+  hydra-create-jobset				\
   hydra-create-user				\
   hydra-notify					\
   hydra-send-stats				\
