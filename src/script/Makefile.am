@@ -10,6 +10,7 @@ distributable_scripts =				\
   hydra-s3-backup-collect-garbage		\
   hydra-create-jobset				\
   hydra-create-user				\
+  hydra-delete-jobset				\
   hydra-notify					\
   hydra-send-stats				\
   nix-prefetch-git				\

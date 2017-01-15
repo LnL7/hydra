@@ -1,0 +1,45 @@
+#! /usr/bin/env perl
+
+use strict;
+use Hydra::Plugin;
+use Hydra::Schema;
+use Hydra::Helper::Nix;
+use Hydra::Helper::AddBuilds;
+use Hydra::Model::DB;
+use Getopt::Long qw(:config gnu_getopt);
+
+sub showHelp {
+    print <<EOF;
+Usage: $0 PROJECT [NAME]
+  [--pull-request PULLREQUEST]
+EOF
+    exit 0;
+}
+
+my ($pullRequest);
+
+GetOptions("pull-request=s" => \$pullRequest,
+           "help" => sub { showHelp() }
+    ) or exit 1;
+
+die "$0: project name required\n" if @ARGV == 0;
+my $projectName = $ARGV[0];
+my $jobsetName = $ARGV[1] if @ARGV == 2;
+
+$jobsetName = "pr-$pullRequest" if $pullRequest;
+
+# TODO
+my $dryRun = defined $ENV{'HYDRA_DRY_RUN'};
+
+my $db = Hydra::Model::DB->new();
+
+txn_do($db, sub {
+    my $project = $db->resultset('Projects')->find({ name => $projectName });
+    my $jobset = $project->jobsets->find({ name => $jobsetName });
+
+    $jobset->jobsetevals->delete;
+    $jobset->builds->delete;
+    $jobset->delete;
+  });
+
+print STDERR "removed jobset '$projectName:$jobsetName'\n";
