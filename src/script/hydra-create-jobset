@@ -6,29 +6,38 @@ use Hydra::Schema;
 use Hydra::Helper::Nix;
 use Hydra::Helper::AddBuilds;
 use Hydra::Model::DB;
-use Getopt::Long qw(:config gnu_getopt);
+use Getopt::Long;
 
 sub showHelp {
     print <<EOF;
 Usage: $0 PROJECT [NAME]
   [--trigger] [--force]
   [--description DESCRIPTION]
-  [--url URL]
-  [--ref REF]
   [--pull-request PULLREQUEST]
+  [--path SOURCE_PATH]
+  [--src SOURCE_INPUT]
+  [--ref REF]
+  [--url URL]
+  [--arg INPUT EXPR]
 EOF
     exit 0;
 }
 
-my ($triggerEval, $forceEval, $description, $nixpkgsUrl, $nixpkgsRef, $pullRequest);
+my ($triggerEval, $forceEval, $dryRun, $description, $pullRequest);
+my ($exprPath, $exprSrc, $exprRef, $exprUrl);
 
+my @inputArgs;
 GetOptions("trigger" => \$triggerEval,
            "force" => \$forceEval,
+           "dry-run" => \$dryRun,
            "description=s" => \$description,
-           "url=s" => \$nixpkgsUrl,
-           "ref=s" => \$nixpkgsRef,
            "pull-request=s" => \$pullRequest,
-           "help" => sub { showHelp() }
+           "path=s" => \$exprPath,
+           "src=s" => \$exprSrc,
+           "ref=s" => \$exprRef,
+           "url=s" => \$exprUrl,
+           "arg=s{2}" => \@inputArgs,
+           "help|h" => sub { showHelp() }
     ) or exit 1;
 
 die "$0: project name required\n" if @ARGV == 0;
@@ -36,37 +45,67 @@ my $projectName = $ARGV[0];
 my $jobsetName = $ARGV[1] if @ARGV == 2;
 
 $jobsetName = "pr-$pullRequest" if $pullRequest;
-$nixpkgsRef = "refs/pull/$pullRequest/merge" if $pullRequest;
+die "$0: jobset name required\n" unless $jobsetName;
 
-$description = "" unless $description;
-$nixpkgsUrl = "https://github.com/NixOS/nixpkgs.git" unless $nixpkgsUrl;
-$nixpkgsRef = "master" unless $nixpkgsRef;
+$exprRef = "refs/pull/$pullRequest/merge" if $pullRequest;
 
-# TODO
-my $dryRun = defined $ENV{'HYDRA_DRY_RUN'};
+$exprPath = "pkgs/top-level/release.nix" unless $exprPath;
+$exprSrc = "nixpkgs" unless $exprSrc;
+$exprRef = "master" unless $exprRef;
+$exprUrl = "https://github.com/NixOS/nixpkgs.git" unless $exprUrl;
+
+
+$dryRun = defined $ENV{'HYDRA_DRY_RUN'} unless $dryRun;
 
 my $db = Hydra::Model::DB->new();
 
 txn_do($db, sub {
     my $project = $db->resultset('Projects')->find({ name => $projectName });
-    my $jobset = $project->jobsets->update_or_create(
-      { name => $jobsetName, description => $description,
-        nixexprinput => "nixpkgs",
-        nixexprpath => "pkgs/top-level/release.nix",
-        enabled => 1, checkinterval => 0, emailoverride => ""
-      });
+    my $jobset;
+
+    print STDERR "dryrun: not creating jobset '$projectName:$jobsetName' $exprPath $exprSrc\n" if $dryRun;
+    unless ($dryRun) {
+      $jobset = $project->jobsets->update_or_create(
+        { name => $jobsetName, description => $description,
+          nixexprinput => $exprSrc, nixexprpath => $exprPath,
+          enabled => 1, keepnr => 0, checkinterval => 0,
+          emailoverride => "", enableemail => 0,
+        });
+    }
+    $jobset = $project->jobsets->find({ name => $jobsetName }) unless $jobset;
 
     if ($jobset->jobsetinputs->count == 0) {
       my $jobsetinput;
-      my $jobsetinputals;
-      $jobsetinput = $jobset->jobsetinputs->create({name => "nixpkgs", type => "git"});
-      $jobsetinputals = $jobsetinput->jobsetinputalts->create({altnr => 0, value => "$nixpkgsUrl $nixpkgsRef"});
+      my $jobsetinputalt;
+
+      print STDERR "dryrun: not creating jobsetinput nixpkgs '$exprUrl $exprRef'\n" if $dryRun;
+      unless ($dryRun) {
+        $jobsetinput = $jobset->jobsetinputs->create({ name => "nixpkgs", type => "git" });
+        $jobsetinputalt = $jobsetinput->jobsetinputalts->create({ altnr => 0, value => "$exprUrl $exprRef" });
+      }
+
+      while (my @inputArg = splice(@inputArgs,0,2)) {
+        my $jobsetinputArg;
+        my $jobsetinputaltArg;
+
+        my $inputType = "nix";
+        if ($inputArg[1] =~ /^https:\/\//) {
+          $inputType = "git";
+        }
+
+        print STDERR "dryrun: not creating jobsetinput @inputArg[0] @inputArg[1]\n" if $dryRun;
+        unless ($dryRun) {
+          $jobsetinputArg = $jobset->jobsetinputs->create({ name => @inputArg[0], type => $inputType });
+          $jobsetinputaltArg = $jobsetinputArg->jobsetinputalts->create({ altnr => 0, value => @inputArg[1] });
+        }
+      }
     }
+
+    print STDERR "created jobset '$projectName:$jobsetName'\n";
 
     if ($triggerEval) {
       $jobset->update({ triggertime => time });
       $jobset->update({ forceeval => 1 }) if $forceEval;
+      print STDERR "triggered jobset '$projectName:$jobsetName'\n";
     }
   });
-
-print STDERR "created jobset '$projectName:$jobsetName'\n";
